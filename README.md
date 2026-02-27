@@ -1,5 +1,7 @@
 # sa_test_cart
 
+## Задание №1
+
 Логические противоречия и недочёты
 В ТЗ выявлено 7 ключевых проблем. Вот их перечень с объяснениями:
 
@@ -73,3 +75,122 @@
 7. Технические лимиты: валидация на клиенте/сервере? API для корзины (REST/GraphQL)?
 
 8. А/B-тесты или исключения по регионам/пользователям для лимитов/рекламы?
+
+
+
+## Задание №2
+Пример REST API запроса для экрана партнерских магазинов "Петрушка Зеленая": GET /api/v1/partners/stores.
+Этот эндпоинт вызывается при переходе на экран в мобильном приложении и возвращает список партнеров в JSON:
+
+GET /api/v1/partners/stores HTTP/1.1
+Host: api.petushka-zelenaya.ru
+Authorization: Bearer <token> (опционально, если требуется авторизация)
+Accept: application/json
+
+
+Запрос простой GET без обязательных параметров тела, поддерживает query-параметры вроде ?page=1&limit=20 или ?city=Moscow для фильтрации
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "success": true,
+  "data": {
+    "stores": [
+      {
+        "id": 1,
+        "name": "Магазин 'Фрукты Свежие'",
+        "description": "Свежие фрукты и овощи от фермеров Подмосковья",
+        "logo": "https://example.com/logos/frukty.svg",
+        "external_url": "https://frukty.ru",
+        "address": "Москва, ул. Ленина, 10",
+        "rating": 4.8,
+        "distance": "2.5 км"
+      },
+      {
+        "id": 2,
+        "name": "Эко-Рынок",
+        "description": "Органические продукты без химии",
+        "logo": "https://example.com/logos/eco.svg",
+        "external_url": "https://eco-rynok.com",
+        "address": "Москва, пр-т Мира, 25",
+        "rating": 4.6,
+        "distance": "1.2 км"
+      },
+      {
+        "id": 3,
+        "name": "Супермаркет 'Здоровье'",
+        "description": "Полный ассортимент здорового питания",
+        "logo": "https://example.com/logos/zdorovie.png",
+        "external_url": "https://zdorovie-shop.ru",
+        "address": "Москва, Тверская, 5",
+        "rating": 4.9,
+        "distance": "0.8 км"
+      }
+    ],
+    "pagination": {
+      "current_page": 1,
+      "total_pages": 3,
+      "total_items": 15
+    }
+  }
+}
+
+
+
+## Задание №3
+
+Верхнеуровневая архитектура отправки push-уведомлений для мобильного приложения "Петрушка Зеленая" строится на микросервисной основе с использованием внешних провайдеров (FCM/APNs). Она обеспечивает масштабируемость, надежность доставки и разделение ответственности между сервисами.
+
+Основные компоненты:
+• Мобильное приложение: Регистрирует device token (FCM для Android, APNs для iOS) и отправляет его в User Service при первом запуске или смене токена.
+
+• User Service: Хранит mapping user_id → list(tokens) в БД (PostgreSQL/Redis), поддерживает unsubscribe.
+
+• Notification Service (микросервис): Центральный оркестратор — принимает события, формирует payload, ставит задачи в очередь.
+
+• Event Bus (Kafka/RabbitMQ): Асинхронная очередь событий (order.created, cart.abandoned, promo.broadcast).
+
+• Push Dispatcher (микросервис): Worker'ы забирают задачи, отправляют в FCM/APNs, обрабатывают feedback (недоставка).
+
+• Push Providers (FCM/APNs): Доставляют уведомления на устройство; приложение обрабатывает click-action (deep link).
+
+
+
+[Мобильное app] ──(token)──> [User Service + DB]
+                           │
+[Бизнес-сервисы] ──(event)──> [Event Bus (Kafka)]
+                           │
+                           v
+[Notification Service] ──(task)──> [Push Queue (Redis/Kafka)]
+                           │
+                           v
+[Push Dispatcher Workers] ──(HTTP/WebSocket)──> [FCM / APNs]
+                                                │
+                                                v
+                                     [Устройство: уведомление + обработка]
+
+
+
+
+Эта схема масштабируется горизонтально: workers добавляются по нагрузке, retry/dead-letter queue для failed доставок, rate limiting по провайдерам.
+
+Поток работы (пример: abandoned cart):
+1. Cart Service детектит корзину без действий >24ч → публикует event в Kafka.
+
+2. Notification Service подписан → читает user_id, тип "cart_abandoned", шаблон (title="Верни корзину!", data={order_id}).
+
+3. Формирует задачи для каждого token пользователя → в Push Queue.
+
+4. Dispatcher забирает → отправляет в FCM/APNs с payload {notification: {...}, data: {screen: "cart"}}.
+
+5. App получает → показывает баннер, при клике открывает корзину.
+
+Рекомендации по реализации:
+• Шаблонизатор: В Notification Service — Jinja2/Handlebars для персонализации ("Ваша корзина с помидорами ждет!").
+
+• Метрики: Отслеживать delivery rate, open rate в Prometheus/Grafana.
+
+• Compliance: Хранить opt-in статус в User DB; поддержка silent pushes для обновления badges.
+
+##
